@@ -1,1 +1,1 @@
-# Advanced-Machine-Learning-Project-Wild-fire-
+# Advanced-Machine-Learning-Project-Wild-fire
