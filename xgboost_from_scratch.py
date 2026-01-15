@@ -91,7 +91,7 @@ class Node:
     
     @property
     def is_leaf(self):
-        """Determines if the node is a leaf based on depth and minimum samples."""
+        """Determines if the node is a leaf."""
         return self.leaf_value is not None
 
     def compute_omega(self):
