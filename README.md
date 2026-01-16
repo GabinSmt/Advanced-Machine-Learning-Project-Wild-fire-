@@ -11,6 +11,13 @@ The experiments conducted in this project are based on the **US Wildfire Dataset
 
 This dataset combines wildfire ignition records with meteorological and environmental variables derived from the GRIDMET climatology database. It provides a challenging and realistic benchmark for evaluating tree-based machine learning models.
 
+The dataset `df_aggregated.csv` was created using the script `df_aggregated.py`, which processes and aggregates the raw data originating from the aforementioned dataset. This preprocessing step includes data cleaning, aggregation, and formatting in order to obtain a dataset suitable for model training and evaluation.
+
+## Repository Structure
+
+- `xgboost_from_scratch.py` contains the full implementation of our XGBoost model developed from scratch.
+- `use_case.ipynb` is the core of the project. This notebook includes the complete data processing pipeline, the application of our custom XGBoost model to the wildfire dataset, and a comparative analysis with existing machine learning models.
+
 ## Project Objectives
 
 The main objectives of this project are:
