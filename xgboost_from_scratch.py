@@ -5,56 +5,37 @@ import math
 
 class Node:
     """
-    Class representing a node in a decision tree. A node becomes a leaf if no split improves the gain.
-    Based on [1], the internal gain used to find the optimal split uses both the gradient and Hessian. 
-    Weighted quantile sketch and optimal leaf values also follow [1]. No sparsity handling for now since we're dealing 
-    with dense data.
-
-    Parameters
-    ----------
+    Decision tree node for XGBoost. Recursively splits data using gradient and Hessian information.
+    Becomes a leaf when no split improves gain. Based on XGBoost paper [1].
+    
+    Parameters :
+    
     X : np.ndarray
         Feature matrix of the training data.
     grad : np.ndarray
         Negative gradient (first-order derivative of the loss) for the samples.
     row_indices : np.ndarray
-        Indices of the training samples associated with this node.
-        Defines the subset of data used to compute splits and leaf values without copying arrays.
+        Indices of training samples for this node.
     hess : np.ndarray
         Hessian (second-order derivative of the loss) for the samples.
     max_depth : int
-        Maximum depth allowed for this node in the tree.
+        Maximum tree depth.
     min_leaf : int
-        Minimum number of samples required to form a node (complexity control).
+        Minimum samples required for a node.
     lambda_ : float
         L2 regularization term on leaf weights.
     gamma : float
-        Regularization term on the number of leaves (prevents low-gain splits).
+        Regularization term on the number of leaves.
     min_child_weight : float
-        Minimum sum of Hessians required in each child node.
-        Prevents splits that are poorly conditioned due to low curvature.
-    eps : float, optional, default=0.1
-        Approximation factor for weighted quantile sketch (used for faster approximate splits).
-
-    Attributes
-    ----------
-    left : Node or None
-        Left child after splitting (None if leaf).
-    right : Node or None
-        Right child after splitting (None if leaf).
-    split_feature : int or None
-        Index of the feature used for the best split.
-    split_value : float or None
-        Value of the feature used for the best split.
-    leaf_value : float or None
-        Predicted value for this node if it is a leaf.
-    depth : int
-        Depth of this node in the tree.
-    is_leaf : bool
-        Whether this node is a leaf.
+        Minimum sum of Hessians in each child node.
     solver : str
-        Method used to find the best split ('greedy', 'global', 'local'). For now, only 'greedy' and 'local' are implemented.
+        Split strategy: 'greedy', 'global', or 'local'.
+    eps : float
+        Approximation factor for weighted quantile sketch (default=0.1).
+    global_candidates : dict or None
+        Pre-computed candidates for global variant.
     """
-    def __init__(self, X, grad, row_indices, hess, max_depth, min_leaf, lambda_, gamma, min_child_weight,solver, eps=0.1):
+    def __init__(self, X, grad, row_indices, hess, max_depth, min_leaf, lambda_, gamma, min_child_weight, solver, eps=0.1, global_candidates=None):
         self.X = X
         self.grad = grad
         self.hess = hess
@@ -68,7 +49,8 @@ class Node:
         self.min_child_weight = min_child_weight
         self.solver = solver
         self.eps = eps
-        self.column_subsample = self.n_features # Using all features for splits for now, can be modified for feature subsampling. 
+        self.global_candidates = global_candidates  
+        self.column_subsample = self.n_features  # No column subsampling 
                                                  
 
         # Tree structure
@@ -110,10 +92,7 @@ class Node:
                     ((G_left + G_right)**2 / (H_left + H_right + self.lambda_))) - self.gamma
 
     def find_best_split_greedy(self, feature_index):
-        """
-        Find the best split for a given feature using a greedy approach.
-        Updates the best score and split point if a better split is found (split_value and split_feature).
-        """
+        """Exact greedy split: evaluates all possible split points for a feature."""
         X_column = self.X[self.row_indices, feature_index]
         sorted_indices = np.argsort(X_column)
         X_sorted = X_column[sorted_indices]
@@ -148,11 +127,7 @@ class Node:
         return best_gain, best_split_value
      
     def weighted_quantile_sketch(self, feature_index):
-        """
-        Compute candidate split points using weighted quantile sketch.
-        Based on [1]: uses Hessian-weighted quantiles.
-        Returns approximately (1/eps) candidate split points.
-        """
+        """Generate candidate split points using Hessian-weighted quantiles."""
         X_column = self.X[self.row_indices, feature_index]
         hess_subset = self.hess[self.row_indices]
         
@@ -165,38 +140,27 @@ class Node:
         total_hess = cumsum_hess[-1]
         normalized_cumsum = cumsum_hess / total_hess
         
-        # Find quantile points 
+        # Find quantile points
         quantile_indices = []
         for q in np.arange(0, 1 + self.eps, self.eps):
             idx = np.searchsorted(normalized_cumsum, q, side='left')
             if idx < len(X_sorted):
                 quantile_indices.append(idx)
         
-        # Remove duplicates and convert to candidate split values
+        # Convert to candidate split values
         quantile_indices = sorted(set(quantile_indices))
         candidates = [X_sorted[i] for i in quantile_indices if i > 0 and i < len(X_sorted) - 1]
         
         return candidates if candidates else [np.median(X_sorted)]
     
-    def find_best_split_local(self, feature_index):
-        """
-        Find best split using local weighted quantile sketch approximation.
-        Only evaluates candidate split points from weighted quantiles.
-        """
-        X_column = self.X[self.row_indices, feature_index]
-        grad_subset = self.grad[self.row_indices]
-        hess_subset = self.hess[self.row_indices]
-        
-        # Get candidate split points from weighted quantile sketch
-        candidates = self.weighted_quantile_sketch(feature_index)
-        
+    def _evaluate_candidates(self, X_column, grad_subset, hess_subset, candidates):
+        """Evaluate a list of candidate split points, return best gain and split value."""
         G_total = np.sum(grad_subset)
         H_total = np.sum(hess_subset)
         
         best_gain = -np.inf
         best_split_value = None
         
-        # Evaluate each candidate split point
         for split_val in candidates:
             mask_left = X_column <= split_val
             
@@ -216,14 +180,31 @@ class Node:
         
         return best_gain, best_split_value
 
+    def find_best_split_local(self, feature_index):
+        """Local variant: re-compute candidates at each node for refinement."""
+        X_column = self.X[self.row_indices, feature_index]
+        grad_subset = self.grad[self.row_indices]
+        hess_subset = self.hess[self.row_indices]
+        
+        candidates = self.weighted_quantile_sketch(feature_index)
+        
+        return self._evaluate_candidates(X_column, grad_subset, hess_subset, candidates)
+
     def find_best_split_global(self, feature_index):
-        pass  # Placeholder for global split method. Don't think we need it for now since our dataset isn't that big.
+        """Global variant: use pre-computed candidates reused across all tree levels."""
+        X_column = self.X[self.row_indices, feature_index]
+        grad_subset = self.grad[self.row_indices]
+        hess_subset = self.hess[self.row_indices]
+
+        if self.global_candidates is None or feature_index not in self.global_candidates:
+            candidates = self.weighted_quantile_sketch(feature_index)
+        else:
+            candidates = self.global_candidates[feature_index]
+        
+        return self._evaluate_candidates(X_column, grad_subset, hess_subset, candidates)
 
     def find_split(self):
-        """
-        Search for the best split across all features using greedy search.
-        """
-        # If max depth or too few samples, make leaf immediately
+        """Recursively find best split across all features using selected solver."""
         if self.depth >= self.max_depth or len(self.row_indices) <= self.min_leaf:
             self.leaf_value = self.compute_omega()
             return
@@ -245,7 +226,7 @@ class Node:
                 best_feature = col
                 best_value = split_value
 
-        # No good split found → leaf
+        # No good split found -> leaf
         if best_gain <= 0:
             self.leaf_value = self.compute_omega()
             return
@@ -264,22 +245,19 @@ class Node:
 
         self.left = Node(self.X, self.grad, left_indices, self.hess,
                         self.max_depth, self.min_leaf, self.lambda_, self.gamma,
-                        self.min_child_weight, self.solver, self.eps)
+                        self.min_child_weight, self.solver, self.eps, self.global_candidates)
         self.right = Node(self.X, self.grad, right_indices, self.hess,
                         self.max_depth, self.min_leaf, self.lambda_, self.gamma,
-                        self.min_child_weight, self.solver, self.eps)
+                        self.min_child_weight, self.solver, self.eps, self.global_candidates)
 
         self.left.depth = self.depth + 1
         self.right.depth = self.depth + 1
 
-        # Recursively split children
         self.left.find_split()
         self.right.find_split()
     
     def predict(self, X):
-        """
-        Vectorized prediction for all rows in X.
-        """
+        """Vectorized prediction for all rows."""
         # If node is a leaf, return the same value for all rows
         if self.is_leaf:
             return np.full(X.shape[0], self.leaf_value)
@@ -301,32 +279,69 @@ class Node:
 
 class XGBoostTree:
     '''
-    Class that implements a single XGBoost tree based on the Node class above. Inspired from Scikit-learn's interface.   
-    Parameters
-    ----------
-    X : np.ndarray
-        Feature matrix of the training data.
-    grad : np.ndarray
-        Negative gradient (first-order derivative of the loss) for the samples.
-    hess : np.ndarray
-        Hessian (second-order derivative of the loss) for the samples.
-    min_leaf : int
-        Minimum number of samples required to form a node (complexity control). Default is 5.
-    min_child_weight : float
-        Minimum sum of Hessians required in each child node.
-        Prevents splits that are poorly conditioned due to low curvature. Default is 1.
-    max_depth : int
-        Maximum depth allowed for this node in the tree. Default is 10.
-    lambda_ : float
-        L2 regularization term on leaf weights. Default is 1.
-    gamma : float
-        Regularization term on the number of leaves (prevents low-gain splits). Default is 1.
-    eps : float, optional, default=0.1
-        Approximation factor for weighted quantile sketch (used for faster approximate splits). Default is 0.1.
-
+    Single XGBoost tree using gradient boosting with configurable split strategy.
+    
     '''
+    def _compute_global_candidates(self, X, hess, eps):
+        """Pre-compute global candidate split points for all features once at tree initialization."""
+        n_samples, n_features = X.shape
+        global_candidates = {}
+        
+        for feature_idx in range(n_features):
+            X_column = X[:, feature_idx]
+            sorted_indices = np.argsort(X_column)
+            X_sorted = X_column[sorted_indices]
+            hess_sorted = hess[sorted_indices]
+            
+            cumsum_hess = np.cumsum(hess_sorted)
+            total_hess = cumsum_hess[-1]
+            normalized_cumsum = cumsum_hess / total_hess
+            
+            # Find quantile points
+            quantile_indices = []
+            for q in np.arange(0, 1 + eps, eps):
+                idx = np.searchsorted(normalized_cumsum, q, side='left')
+                if idx < len(X_sorted):
+                    quantile_indices.append(idx)
+            
+            quantile_indices = sorted(set(quantile_indices))
+            candidates = [X_sorted[i] for i in quantile_indices if i > 0 and i < len(X_sorted) - 1]
+            
+            global_candidates[feature_idx] = candidates if candidates else [np.median(X_sorted)]
+        
+        return global_candidates
+    
     def fit(self, X, grad, hess, min_leaf = 5, min_child_weight = 1 ,max_depth = 10, lambda_ = 1, gamma = 1, solver = 'greedy', eps = 0.1):
-        self.tree = Node(X, grad, np.array(np.arange(len(X))), hess, max_depth, min_leaf, lambda_, gamma, min_child_weight, solver, eps)
+        """ Fit the XGBoost tree to the data.
+
+        Parameters:
+
+        X : np.ndarray
+            Feature matrix.
+        grad : np.ndarray
+            First-order gradients.
+        hess : np.ndarray
+            Second-order gradients (Hessians).
+        min_leaf : int (default=5)
+            Minimum samples per node.
+        min_child_weight : float (default=1)
+            Minimum sum of Hessians in each child.
+        max_depth : int (default=10)
+            Maximum tree depth.
+        lambda_ : float (default=1)
+            L2 regularization on leaf weights.
+        gamma : float (default=1)
+            Regularization on number of leaves.
+        solver : str (default='greedy')
+            Split strategy: 'greedy', 'global', or 'local'.
+        eps : float (default=0.1)
+            Approximation factor for weighted quantile sketch.
+        """
+        global_candidates = None
+        if solver == 'global':
+            global_candidates = self._compute_global_candidates(X, hess, eps)
+        
+        self.tree = Node(X, grad, np.array(np.arange(len(X))), hess, max_depth, min_leaf, lambda_, gamma, min_child_weight, solver, eps, global_candidates)
         self.tree.find_split()
         return self
     
@@ -336,18 +351,14 @@ class XGBoostTree:
    
 class XGBoostClassifier:
     '''
-    Based on Node() and XGBoostTree() classes above, this class implements an XGBoost classifier using gradient boosting with logistic loss. 
-    Parameters
-    ----------
-
-
+    XGBoost classifier using gradient boosting with logistic loss.
     '''
     def __init__(self):
         self.trees = []
     
     @staticmethod
     def sigmoid(x):
-        """Numerically stable sigmoid function. We avoid overflow issues for large positive or negative x."""
+        """Numerically stable sigmoid (avoids overflow for large abs(x))."""
         pos_mask = (x >= 0)
         neg_mask = ~pos_mask
         result = np.zeros_like(x, dtype=np.float64)
@@ -367,18 +378,45 @@ class XGBoostClassifier:
         binary_no  = np.count_nonzero(column == 0)
         return(np.log(binary_yes/binary_no))
 
-    # first order gradient logLoss
     def grad(self, preds, labels):
+        """First-order gradient of logistic loss."""
         preds = self.sigmoid(preds)
         return(preds - labels)
-    
-    # second order gradient logLoss
     def hess(self, preds):
+        """Second-order gradient (Hessian) of logistic loss."""
         preds = self.sigmoid(preds)
         return(preds * (1 - preds))
     
     
     def fit(self, X, y, min_child_weight = 1, max_depth = 5, min_leaf = 5, learning_rate = 0.4, boosting_rounds = 5, lambda_ = 1.5, gamma = 1, solver = 'greedy', eps = 0.1):
+        """    
+        Fit the XGBoost classifier to the data.
+        
+        Parameters:
+
+        X : np.ndarray
+            Feature matrix of shape (n_samples, n_features).
+        y : np.ndarray
+            Binary labels (0 or 1).
+        min_child_weight : float (default=1)
+            Minimum sum of Hessians in each child node.
+        max_depth : int (default=5)
+            Maximum tree depth.
+        min_leaf : int (default=5)
+            Minimum samples per node.
+        learning_rate : float (default=0.4)
+            Shrinkage parameter for tree predictions.
+        boosting_rounds : int (default=5)
+            Number of boosting iterations.
+        lambda_ : float (default=1.5)
+            L2 regularization on leaf weights.
+        gamma : float (default=1)
+            Regularization on number of leaves.
+        solver : str (default='greedy')
+            Split strategy: 'greedy', 'global', or 'local'.
+        eps : float (default=0.1)
+            Approximation factor for weighted quantile sketch.
+        """
         self.X, self.y = X, y
         self.max_depth = max_depth
         self.eps = eps
@@ -390,7 +428,7 @@ class XGBoostClassifier:
         self.lambda_ = lambda_
         self.gamma  = gamma
     
-        self.base_pred = np.full((X.shape[0],), self.log_odds(y)).astype('float64') # initial prediction (log-odds of positive class)
+        self.base_pred = np.full((X.shape[0],), self.log_odds(y)).astype('float64')
     
         for booster in range(self.boosting_rounds):
             Grad = self.grad(self.base_pred, self.y)
@@ -403,18 +441,17 @@ class XGBoostClassifier:
         pred = np.full((X.shape[0],), self.log_odds(self.y)).astype('float64')
         
         for tree in self.trees:
-            pred += self.learning_rate * tree.predict(X) 
+            pred += self.learning_rate * tree.predict(X)
           
         return self.sigmoid(pred)
     
     def predict(self, X):
         pred = np.full((X.shape[0],), self.log_odds(self.y)).astype('float64')
         for tree in self.trees:
-            pred += self.learning_rate * tree.predict(X) 
+            pred += self.learning_rate * tree.predict(X)
         
         predicted_probas = self.sigmoid(pred)
-        preds = np.where(predicted_probas > 0.5, 1, 0)
-        return preds
+        return np.where(predicted_probas > 0.5, 1, 0)
 
 
     
