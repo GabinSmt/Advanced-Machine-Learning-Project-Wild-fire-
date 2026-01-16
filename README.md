@@ -1,6 +1,7 @@
 # XGBoost from Scratch for Wildfire Prediction
 
-This repository contains a complete implementation of the **XGBoost algorithm from scratch**, developed for educational and research purposes. The project focuses on understanding the theoretical foundations of gradient boosting with decision trees and applying the resulting model to a real-world, large-scale dataset.
+This repository contains a complete implementation of the **XGBoost algorithm from scratch**, developed in the context of the *Advanced Machine Learning* course taught at ENSAE. The project focuses on understanding the theoretical foundations of gradient boosting with decision trees and applying the resulting model to a real-world, large-scale dataset.
+
 
 ## Dataset
 
