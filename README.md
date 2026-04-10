@@ -1,5 +1,16 @@
 # XGBoost from Scratch for Wildfire Prediction
 
+<div align="center">
+
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)
+![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi)
+![MLflow](https://img.shields.io/badge/mlflow-%23d9ead3.svg?style=flat&logo=mlflow&logoColor=blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)
+
+</div>
+
 This repository contains a complete implementation of the **XGBoost algorithm from scratch**, originally developed in the context of the *Advanced Machine Learning* course taught at ENSAE. 
 
 The project has now transitioned into an **MLOps pipeline**, focusing not only on understanding the theoretical foundations of gradient boosting, but also on encapsulating the resulting model into a deployable infrastructure.
