@@ -16,7 +16,7 @@ def load_data_from_s3() -> pd.DataFrame:
     )
     
     bucket = os.getenv('S3_BUCKET')
-    file_path = f"{bucket}/df_aggregated.csv"
+    file_path = f"{bucket}/df_aggregated.parquet"
     
     with fs.open(file_path, 'rb') as f:
         return pd.read_csv(f)
