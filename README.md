@@ -41,31 +41,7 @@ The repository follows standard MLOps practices to ensure reproducibility and cl
 
 The experiments are based on the **US Wildfire Dataset (2014–2025)**, publicly available on [Kaggle](https://www.kaggle.com/datasets/firecastrl/us-wildfire-dataset). It combines wildfire ignition records with meteorological and environmental variables derived from the GRIDMET climatology database.
 
-**Important:** To keep the repository lightweight, the aggregated dataset (`df_aggregated.csv`) is hosted on our S3 MinIO bucket. It is automatically fetched by the scripts located in `src/data/` using the credentials defined in your `.env` file.
-
-## Getting Started
-
-### 1. Installation
-Clone the repository and install the required dependencies:
-```bash
-git clone <repository_url>
-cd <repository_folder>
-pip install -r requirements.txt
-```
-
-### 2. Environment Variables
-Create your local environment file:
-```bash
-cp .env.example .env
-```
-Open `.env` and fill in your specific credentials (S3 keys, MLflow URIs) provided by the team administrator.
-
-### 3. Code Quality (Ruff)
-This project enforces strict code formatting using **Ruff**. Before committing any Python code, run the following commands at the root of the project:
-```bash
-ruff check . --fix   # Fixes imports and minor errors
-ruff format .        # Formats the code strictly
-```
+**Important:** To keep the repository lightweight, the aggregated dataset (`df_aggregated.parquet`) is hosted on our S3 MinIO bucket. It is automatically fetched by the scripts located in `src/data/` using the credentials defined in your `.env` file.
 
 ## Git Workflow & Branching Convention
 
@@ -73,10 +49,10 @@ To avoid conflicts and maintain a clean history, **pushing directly to the `main
 
 **Branch Naming Convention:**
 Please name your branches using the following format: `type/firstname-action`
-- `feat/` : New feature (e.g., `feat/alice-mlflow-integration`)
-- `fix/` : Bug fix (e.g., `fix/bob-s3-connection`)
-- `docs/` : Documentation updates (e.g., `docs/chloe-update-readme`)
-- `chore/` : Maintenance or configuration (e.g., `chore/david-docker-setup`)
+- `feat/` : New feature 
+- `fix/` : Bug fix 
+- `docs/` : Documentation updates 
+- `chore/` : Maintenance or configuration 
 - `refactor/`: Code reorganization without changing functionality
 
 ## Methodology & References
