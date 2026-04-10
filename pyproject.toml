@@ -1,0 +1,21 @@
+[project]
+name = "WildFirePrediction"
+version = "0.1.0"
+description = "MLOps Project - Wildfire Prediction"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "data",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["N806"] 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
