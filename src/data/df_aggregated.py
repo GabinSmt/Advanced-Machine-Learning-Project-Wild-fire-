@@ -118,11 +118,19 @@ def load_data_from_s3() -> pd.DataFrame:
         },
     )
 
-    file_path = f"{bucket}/df_aggregated.csv.zip"
+    try:
+        file_path = f"{bucket}/df_aggregated.parquet"
 
-    with fs.open(file_path, "rb") as f:
-        with zipfile.ZipFile(f) as z:
-            csv_files = [name for name in z.namelist() if name.endswith('.csv') and not name.startswith('__MACOSX')]
-            df = pd.read_csv(z.open(csv_files[0]))
-            
+        with fs.open(file_path, "rb") as f:
+            df = pd.read_parquet(f)
+
+    except Exception as e:
+        print(f"Try to read parquet is non successfull : {e}")
+        file_path = f"{bucket}/df_aggregated.csv.zip"
+
+        with fs.open(file_path, "rb") as f:
+            with zipfile.ZipFile(f) as z:
+                csv_files = [name for name in z.namelist() if name.endswith('.csv') and not name.startswith('__MACOSX')]
+                df = pd.read_csv(z.open(csv_files[0]))
+                
     return _clean(df)
