@@ -5,7 +5,7 @@ Usage
 -----
 Run from the project root::
 
-    python src/models/train.py
+    PYTHONPATH=. python src/models/train.py
 
 Environment variables (set in .env or shell)::
 
@@ -14,13 +14,12 @@ Environment variables (set in .env or shell)::
     MLFLOW_TRACKING_URI  (optional) MLflow tracking server URI — defaults to ./mlruns
 
 The script will:
-    1. Load data from S3 (parquet).
-    2. Prepare features and target.
-    3. Run StratifiedKFold cross-validation with RandomizedSearchCV to tune
+    1. Load and clean data from S3 via src.data.df_aggregated.
+    2. Run StratifiedKFold cross-validation with RandomizedSearchCV to tune
        hyperparameters on a scikit-learn compatible wrapper.
-    4. Retrain the best model on the full training set.
-    5. Log parameters, CV metrics and the serialised model to MLflow.
-    6. Save the model as a pickle file in models/.
+    3. Retrain the best model on the full training set.
+    4. Log parameters, CV metrics and the serialised model to MLflow.
+    5. Save the model as a pickle file in models/.
 """
 
 import argparse
@@ -33,12 +32,12 @@ import mlflow
 import mlflow.pyfunc
 import numpy as np
 import pandas as pd
-import s3fs
 from dotenv import load_dotenv
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 
+from src.data.df_aggregated import FEATURES, TARGET_COLUMN, load_data_from_s3
 from src.models.classifier import XGBoostClassifier
 from src.models.utils import split_train_test
 
@@ -150,84 +149,15 @@ class XGBoostClassifierWrapper(BaseEstimator, ClassifierMixin):
 
 
 # ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
-
-
-def load_data_from_s3() -> pd.DataFrame:
-    """
-    Load the aggregated wildfire dataset from S3 / MinIO.
-
-    Reads ``S3_ENDPOINT_URL`` and ``S3_BUCKET`` from environment variables.
-
-    Returns
-    -------
-    pd.DataFrame
-        Raw dataset loaded from ``{S3_BUCKET}/df_aggregated.parquet``.
-
-    Raises
-    ------
-    EnvironmentError
-        If required environment variables are missing.
-    """
-    endpoint = os.getenv("S3_ENDPOINT_URL")
-    bucket = os.getenv("S3_BUCKET")
-
-    if not endpoint or not bucket:
-        raise EnvironmentError(
-            "S3_ENDPOINT_URL and S3_BUCKET must be set in the environment or .env file."
-        )
-
-    logger.info("Connecting to S3 at %s, bucket=%s", endpoint, bucket)
-    fs = s3fs.S3FileSystem(client_kwargs={"endpoint_url": endpoint})
-    file_path = f"{bucket}/df_aggregated.parquet"
-
-    with fs.open(file_path, "rb") as f:
-        df = pd.read_parquet(f)
-
-    logger.info("Loaded dataset: %d rows × %d columns", *df.shape)
-    return df
-
-
-# ---------------------------------------------------------------------------
 # Feature preparation
 # ---------------------------------------------------------------------------
 
-TARGET_COLUMN = "fire"
-
 
 def prepare_features(df: pd.DataFrame):
-    """
-    Split a raw DataFrame into feature matrix and target vector.
-
-    Drops the target column and any columns unsuitable for model input
-    (e.g. identifiers). Edit this function if the schema changes.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Raw dataset.
-
-    Returns
-    -------
-    X : np.ndarray
-        Feature matrix.
-    y : np.ndarray
-        Binary target vector.
-    feature_names : list of str
-        Names of the selected feature columns.
-    """
-    if TARGET_COLUMN not in df.columns:
-        raise ValueError(
-            f"Target column '{TARGET_COLUMN}' not found. "
-            f"Available columns: {list(df.columns)}"
-        )
-
-    feature_cols = [c for c in df.columns if c != TARGET_COLUMN]
-    X = df[feature_cols].to_numpy(dtype=np.float64)
+    """Split cleaned DataFrame into X, y using FEATURES from df_aggregated."""
+    X = df[FEATURES].to_numpy(dtype=np.float64)
     y = df[TARGET_COLUMN].to_numpy(dtype=np.int64)
-
-    return X, y, feature_cols
+    return X, y, FEATURES
 
 
 # ---------------------------------------------------------------------------
