@@ -30,15 +30,14 @@ import argparse
 import logging
 import os
 import pickle
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import mlflow
 import mlflow.pyfunc
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-import s3fs
 from dotenv import load_dotenv
 from mlflow.tracking import MlflowClient
 from sklearn.base import BaseEstimator, ClassifierMixin
