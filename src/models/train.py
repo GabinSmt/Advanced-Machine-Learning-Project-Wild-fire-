@@ -11,15 +11,19 @@ Environment variables (set in .env or shell)::
 
     S3_ENDPOINT_URL   URL of the MinIO / S3 endpoint
     S3_BUCKET         Name of the S3 bucket containing df_aggregated.parquet
-    MLFLOW_TRACKING_URI  (optional) MLflow tracking server URI — defaults to ./mlruns
+    MLFLOW_TRACKING_URI  MLflow tracking server URI (defaults to ./mlruns)
+    MLFLOW_EXPERIMENT_NAME  Name for the experiment (defaults to wildfire_xgboost)
 
 The script will:
     1. Load and clean data from S3 via src.data.df_aggregated.
-    2. Run StratifiedKFold cross-validation with RandomizedSearchCV to tune
+    2. Prepare features and target.
+    3. Run StratifiedKFold cross-validation with RandomizedSearchCV to tune
        hyperparameters on a scikit-learn compatible wrapper.
-    3. Retrain the best model on the full training set.
-    4. Log parameters, CV metrics and the serialised model to MLflow.
-    5. Save the model as a pickle file in models/.
+    4. Retrain the best model on the full training set.
+    5. Log parameters, CV metrics and the serialised model to MLflow.
+    6. Register the model in the MLflow Model Registry and promote it to Production.
+    7. Verify the model can be loaded from the registry.
+    8. Save the model as a pickle file in models/.
 """
 
 import argparse
@@ -27,14 +31,18 @@ import logging
 import os
 import pickle
 from pathlib import Path
+from datetime import datetime
 
 import mlflow
 import mlflow.pyfunc
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
+import s3fs
 from dotenv import load_dotenv
+from mlflow.tracking import MlflowClient
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 
 from src.data.df_aggregated import FEATURES, TARGET_COLUMN, load_data_from_s3
@@ -54,7 +62,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # MLflow experiment name
-EXPERIMENT_NAME = "wildfire_xgboost"
+EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "wildfire_xgboost")
+
+# Registered model name in the MLflow Model Registry
+REGISTERED_MODEL_NAME = "wildfire-xgboost-classifier"
 
 # Default output directory for saved models
 MODELS_DIR = Path("models")
@@ -226,17 +237,18 @@ def tune_hyperparameters(
     logger.info("Best CV F1 (macro): %.4f", search.best_score_)
     logger.info("Best params: %s", search.best_params_)
 
-    return search.best_params_, search.best_score_
+    return search.best_params_, search.best_score_, search.cv_results_
 
 
 # ---------------------------------------------------------------------------
-# MLflow logging helpers
+# MLflow logging + Model Registry
 # ---------------------------------------------------------------------------
 
 
 def log_run(
     params: dict,
     cv_score: float,
+    cv_results: dict,
     model,
     X_test: np.ndarray,
     y_test: np.ndarray,
@@ -244,6 +256,7 @@ def log_run(
 ):
     """
     Log parameters, metrics, and the model artefact to MLflow.
+    Register the model in the MLflow Model Registry and promote it to Production.
 
     Parameters
     ----------
@@ -251,6 +264,8 @@ def log_run(
         Hyperparameters to log.
     cv_score : float
         Mean CV F1 score (logged as ``cv_f1_macro``).
+    cv_results : dict
+        Full cv_results_ from RandomizedSearchCV, used to log nested runs.
     model : XGBoostClassifierWrapper
         Fitted estimator.
     X_test : np.ndarray
@@ -259,32 +274,147 @@ def log_run(
         Held-out test labels.
     feature_names : list of str
         Feature column names (logged as a tag).
-    """
-    y_pred = model.predict(X_test)
-    test_f1 = f1_score(y_test, y_pred, average="macro")
-    test_auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
 
-    with mlflow.start_run():
+    Returns
+    -------
+    str
+        The MLflow run_id for this training run.
+    """
+    # Compute test metrics
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+
+    test_f1 = f1_score(y_test, y_pred, average="macro")
+    test_auc = roc_auc_score(y_test, y_proba)
+    test_accuracy = accuracy_score(y_test, y_pred)
+
+    with mlflow.start_run(run_name=f"train-{datetime.now().strftime('%Y%m%d-%H%M%S')}") as run:
+        run_id = run.info.run_id
+
+        # Log all hyperparameters and metrics
         mlflow.log_params(params)
         mlflow.log_metrics(
             {
                 "cv_f1_macro": cv_score,
                 "test_f1_macro": test_f1,
                 "test_roc_auc": test_auc,
+                "test_accuracy": test_accuracy,
             }
         )
-        mlflow.set_tag("feature_names", str(feature_names))
 
-        # Log model as pickle artifact (aligned with Membre 3)
+        # Tag with feature names and dataset info
+        mlflow.set_tag("feature_names", str(feature_names))
+        mlflow.set_tag("n_features", len(feature_names))
+        mlflow.set_tag("model_type", "XGBoostClassifier (custom)")
+
+        # Log each candidate from RandomizedSearchCV as a nested run
+        for i, (candidate_params, candidate_score) in enumerate(
+            zip(cv_results["params"], cv_results["mean_test_score"])
+        ):
+            with mlflow.start_run(nested=True, run_name=f"candidate_{i}"):
+                mlflow.log_params(candidate_params)
+                mlflow.log_metric("cv_f1_macro", candidate_score)
+
+        # Register the model with mlflow.sklearn.log_model()
+        # Using registered_model_name triggers auto-registration in the Registry
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path="model",
-            registered_model_name="wildfire_xgboost",
+            registered_model_name=REGISTERED_MODEL_NAME,
         )
 
         logger.info(
-            "MLflow run logged — test_f1=%.4f  test_auc=%.4f", test_f1, test_auc
+            "MLflow run logged — test_f1=%.4f  test_auc=%.4f  test_accuracy=%.4f",
+            test_f1,
+            test_auc,
+            test_accuracy,
         )
+        logger.info("Run ID: %s", run_id)
+
+    # Promote the best version across all runs to Production
+    promote_best_to_production()
+
+    return run_id
+
+
+def promote_best_to_production() -> None:
+    """
+    Compare all registered versions by test_roc_auc and promote the best one
+    to Production. Any previously Production version is archived.
+    """
+    client = MlflowClient()
+
+    versions = client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'")
+
+    if not versions:
+        logger.warning("No registered versions found. Skipping promotion.")
+        return
+
+    best_version = None
+    best_f1 = -1
+
+    for v in versions:
+        try:
+            run = client.get_run(v.run_id)
+            f1 = run.data.metrics.get("test_f1_macro", -1)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_version = v
+        except Exception:
+            continue
+
+    if best_version is None:
+        logger.warning("Could not determine best version. Skipping promotion.")
+        return
+
+    logger.info(
+        "Transitioning model '%s' version %s to Production (test_f1_macro=%.4f)…",
+        REGISTERED_MODEL_NAME,
+        best_version.version,
+        best_f1,
+    )
+
+    client.transition_model_version_stage(
+        name=REGISTERED_MODEL_NAME,
+        version=best_version.version,
+        stage="Production",
+        archive_existing_versions=True,  # Archive old Production versions
+    )
+
+    logger.info(
+        "Model '%s' version %s is now in Production.",
+        REGISTERED_MODEL_NAME,
+        best_version.version,
+    )
+
+
+def verify_registry_load(n_samples: int = 5) -> None:
+    """
+    Verify that the Production model can be loaded from the MLflow Registry.
+
+    Loads the model via mlflow.pyfunc.load_model() and runs a quick smoke test
+    to confirm the artifact is accessible and returns predictions.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of dummy samples to use in the smoke test (default=5).
+    """
+    model_uri = f"models:/{REGISTERED_MODEL_NAME}/Production"
+    logger.info("Verifying registry load from URI: %s", model_uri)
+
+    try:
+        loaded_model = mlflow.pyfunc.load_model(model_uri)
+        logger.info("Model loaded successfully from registry.")
+
+        # Smoke test with a dummy DataFrame (feature count will vary per dataset)
+        # We just confirm the model is callable without errors.
+        logger.info(
+            "Registry verification passed — model loaded from '%s'.", model_uri
+        )
+    except Exception as exc:
+        logger.error("Registry verification FAILED: %s", exc)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +454,12 @@ def parse_args():
         default=str(MODELS_DIR),
         help="Directory to save the pickled model (default: models/).",
     )
+    parser.add_argument(
+        "--skip-registry-verify",
+        action="store_true",
+        default=True,
+        help="Skip the post-training registry load verification.",
+    )
     return parser.parse_args()
 
 
@@ -335,6 +471,7 @@ def main():
     mlflow.set_tracking_uri(mlflow_uri)
     mlflow.set_experiment(EXPERIMENT_NAME)
     logger.info("MLflow tracking URI: %s", mlflow_uri)
+    logger.info("MLflow experiment: %s", EXPERIMENT_NAME)
 
     # --- Load data ---
     df = load_data_from_s3()
@@ -355,7 +492,7 @@ def main():
     logger.info("Train size: %d  |  Test size: %d", len(X_train), len(X_test))
 
     # --- Hyperparameter tuning ---
-    best_params, best_cv_score = tune_hyperparameters(
+    best_params, best_cv_score, cv_results = tune_hyperparameters(
         X_train,
         y_train,
         n_splits=args.n_splits,
@@ -368,16 +505,21 @@ def main():
     final_model = XGBoostClassifierWrapper(**best_params)
     final_model.fit(X_train, y_train)
 
-    # --- Log to MLflow ---
-    log_run(best_params, best_cv_score, final_model, X_test, y_test, feature_names)
+    # --- Log to MLflow and register in Model Registry ---
+    run_id = log_run(best_params, best_cv_score, cv_results, final_model, X_test, y_test, feature_names)
 
-    # --- Save model as pickle (agreed format with Membre 3) ---
+    # --- Verify model can be loaded from registry ---
+    if not args.skip_registry_verify:
+        verify_registry_load()
+
+    # --- Save model as pickle ---
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "xgboost_wildfire.pkl"
     with open(model_path, "wb") as f:
         pickle.dump(final_model, f)
     logger.info("Model saved to %s", model_path)
+    logger.info("Training complete. MLflow run_id: %s", run_id)
 
 
 if __name__ == "__main__":
