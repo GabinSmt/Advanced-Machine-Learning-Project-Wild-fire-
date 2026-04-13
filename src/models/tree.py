@@ -56,10 +56,10 @@ class XGBoostTree:
                     indices.append(idx)
 
             indices = sorted(set(indices))
-            candidates = [
-                X_sorted[i] for i in indices if 0 < i < len(X_sorted) - 1
-            ]
-            global_candidates[feat] = candidates if candidates else [np.median(X_sorted)]
+            candidates = [X_sorted[i] for i in indices if 0 < i < len(X_sorted) - 1]
+            global_candidates[feat] = (
+                candidates if candidates else [np.median(X_sorted)]
+            )
 
         return global_candidates
 

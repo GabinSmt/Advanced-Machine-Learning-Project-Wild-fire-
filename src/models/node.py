@@ -200,9 +200,7 @@ class Node:
                 indices.append(idx)
 
         indices = sorted(set(indices))
-        candidates = [
-            X_sorted[i] for i in indices if 0 < i < len(X_sorted) - 1
-        ]
+        candidates = [X_sorted[i] for i in indices if 0 < i < len(X_sorted) - 1]
         return candidates if candidates else [np.median(X_sorted)]
 
     def _evaluate_candidates(self, X_col, g_sub, h_sub, candidates):
