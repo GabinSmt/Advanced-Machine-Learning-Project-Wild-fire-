@@ -287,7 +287,9 @@ def log_run(
     test_auc = roc_auc_score(y_test, y_proba)
     test_accuracy = accuracy_score(y_test, y_pred)
 
-    with mlflow.start_run(run_name=f"train-{datetime.now().strftime('%Y%m%d-%H%M%S')}") as run:
+    with mlflow.start_run(
+        run_name=f"train-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    ) as run:
         run_id = run.info.run_id
 
         # Log all hyperparameters and metrics
@@ -408,9 +410,7 @@ def verify_registry_load(n_samples: int = 5) -> None:
 
         # Smoke test with a dummy DataFrame (feature count will vary per dataset)
         # We just confirm the model is callable without errors.
-        logger.info(
-            "Registry verification passed — model loaded from '%s'.", model_uri
-        )
+        logger.info("Registry verification passed — model loaded from '%s'.", model_uri)
     except Exception as exc:
         logger.error("Registry verification FAILED: %s", exc)
         raise
@@ -505,7 +505,15 @@ def main():
     final_model.fit(X_train, y_train)
 
     # --- Log to MLflow and register in Model Registry ---
-    run_id = log_run(best_params, best_cv_score, cv_results, final_model, X_test, y_test, feature_names)
+    run_id = log_run(
+        best_params,
+        best_cv_score,
+        cv_results,
+        final_model,
+        X_test,
+        y_test,
+        feature_names,
+    )
 
     # --- Verify model can be loaded from registry ---
     if not args.skip_registry_verify:
