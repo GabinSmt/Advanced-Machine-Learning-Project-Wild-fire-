@@ -16,11 +16,10 @@ Usage
 
 import ast
 import os
+import zipfile
 
 import pandas as pd
 import s3fs
-import zipfile
-
 from dotenv import load_dotenv
 
 
@@ -85,8 +84,10 @@ def load_data_from_s3() -> pd.DataFrame:
     Reads ``S3_ENDPOINT_URL`` and ``S3_BUCKET`` from environment variables
     (set in your ``.env`` file or shell).
 
-    The raw file ``df_aggregated.csv.zip`` is fetched from S3, unzipped,
-    cleaned and returned as a model-ready DataFrame.
+    If ``ACCESS_KEY`` is not set, connects anonymously (public bucket).
+
+    The raw file ``df_aggregated.parquet`` is fetched from S3, with automatic
+    fallback to ``df_aggregated.csv.zip`` if the parquet file is not found.
 
     Returns
     -------
@@ -108,10 +109,18 @@ def load_data_from_s3() -> pd.DataFrame:
             "S3_ENDPOINT_URL and S3_BUCKET must be set in the environment or .env file."
         )
 
+    access_key = os.getenv("ACCESS_KEY") or None
+    secret_key = os.getenv("SECRET_KEY") or None
+    session_token = os.getenv("SESSION_TOKEN") or None
+
+    # Use anonymous access if no credentials are provided (public bucket)
+    anon = not bool(access_key)
+
     fs = s3fs.S3FileSystem(
-        key=os.getenv("ACCESS_KEY"),
-        secret=os.getenv("SECRET_KEY"),
-        token=os.getenv("SESSION_TOKEN"),
+        anon=anon,
+        key=access_key,
+        secret=secret_key,
+        token=session_token,
         client_kwargs={
             "endpoint_url": endpoint,
             "verify": False,
@@ -120,17 +129,18 @@ def load_data_from_s3() -> pd.DataFrame:
 
     try:
         file_path = f"{bucket}/df_aggregated.parquet"
-
         with fs.open(file_path, "rb") as f:
             df = pd.read_parquet(f)
 
     except Exception as e:
         print(f"Try to read parquet is non successfull : {e}")
         file_path = f"{bucket}/df_aggregated.csv.zip"
-
         with fs.open(file_path, "rb") as f:
             with zipfile.ZipFile(f) as z:
-                csv_files = [name for name in z.namelist() if name.endswith('.csv') and not name.startswith('__MACOSX')]
+                csv_files = [
+                    name for name in z.namelist()
+                    if name.endswith(".csv") and not name.startswith("__MACOSX")
+                ]
                 df = pd.read_csv(z.open(csv_files[0]))
-                
+
     return _clean(df)
