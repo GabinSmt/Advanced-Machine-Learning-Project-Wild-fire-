@@ -106,4 +106,6 @@ instance/
 docs/_build/
 celerybeat-schedule
 celerybeat.pid
-.abstra/
+.abstra/mlruns/
+models/
+mlruns/
