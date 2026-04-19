@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: wildfire-api
-          image: ghcr.io/plemvan/WildFirePrediction:latest
+          image: ghcr.io/plemvan/wildfireprediction:latest
           ports:
             - containerPort: 8000
           env:
