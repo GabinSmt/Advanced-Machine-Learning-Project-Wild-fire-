@@ -47,3 +47,4 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+# wildfire api deployment
