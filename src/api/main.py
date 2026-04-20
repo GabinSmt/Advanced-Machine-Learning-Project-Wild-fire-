@@ -96,6 +96,7 @@ class PredictionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 @app.get("/health", tags=["Monitoring"])
 def health():
     """Liveness check — returns 200 if the API is running."""
@@ -127,6 +128,14 @@ def predict(features: WildfireFeatures):
 
     proba = float(sklearn_model.predict_proba(data.to_numpy())[0, 1])
     label = int(proba >= 0.5)
+
+    # Log inputs and outputs for monitoring
+    logger.info(
+        "PREDICT | inputs=%s | wildfire=%d | probability=%.4f",
+        features.model_dump(),
+        label,
+        proba,
+    )
 
     return PredictionResponse(
         wildfire=label,
