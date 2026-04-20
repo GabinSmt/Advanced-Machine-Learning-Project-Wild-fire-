@@ -36,6 +36,13 @@ def load_production_model():
     mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "./mlruns")
     mlflow.set_tracking_uri(mlflow_uri)
 
+    username = os.getenv("MLFLOW_TRACKING_USERNAME")
+    password = os.getenv("MLFLOW_TRACKING_PASSWORD")
+    if username:
+        os.environ["MLFLOW_TRACKING_USERNAME"] = username
+    if password:
+        os.environ["MLFLOW_TRACKING_PASSWORD"] = password
+
     model_uri = f"models:/{REGISTERED_MODEL_NAME}/Production"
     logger.info("Loading model from registry: %s", model_uri)
 
